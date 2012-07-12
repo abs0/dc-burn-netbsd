@@ -1,0 +1,184 @@
+#!/bin/sh -e
+
+dist_proto=http
+dist_host=ftp.netbsd.org
+dist_path=/pub/NetBSD
+version=6.0_BETA2
+kernel_type=GENERIC_MD
+tmpdir=dc-burn-netbsd-files
+opt_cdrecord="driveropts=burnfree gracetime=3"
+
+while getopts Cc:d:hk:nrv: f; do
+    case $f in
+        C)  opt_clean=1 ;;
+        v)  version="$OPTARG" ;;
+        c)  opt_cdrecord="$OPTARG" ;;
+	d)  opt_datadir="$OPTARG" ;;
+	r)  opt_release=1 ;;
+        h)  opt_show_help=1 ;;
+        k)  kernel_type="$OPTARG" ;;
+        n)  opt_nowrite=1 ;;
+        t)  tmpdir="$OPTARG" ;;
+  esac
+done
+shift $(expr $OPTIND - 1)
+
+if [ $# != 0 -o -n "$opt_show_help" ] ; then
+    cat <<END
+Usage: dc-burn-netbsd [opts]
+ -C      : Clean work directory before starting
+ -c opts : Set cdrecord opts ($opt_cdrecord)
+ -d      : Take kernel/ & sets/ under datadir - no downloading
+ -h      : This help
+ -k type : Set kernel type ($kernel_type) eg: GENERIC or GENERIC_MD
+ -n      : Generate data but do not write (just display cdrecord commands)
+ -r      : Include full NetBSD release on CD
+ -t tmpd : Set temporary work directory to tmpd
+ -v vers : Set NetBSD version ($version) eg: 5.1 6.0_BETA2
+
+dc-burn will create a temporary work directory $tmpdir which will
+need to have sufficient space to store the downloaded files
+
+if -d is used the directory is expected to match the layout on ftp.netbsd.org:
+ - kernel/netbsd-\$type.bin.gz, and
+ - sets/base.tgz (etc - if -r given)
+
+END
+    exit;
+fi
+
+if [ $(id -u) != 0 ] ; then
+    if [ -n "$opt_release" ]; then
+        echo "Warning: not running as root: permissions will be incorrect"
+    fi
+    if [ -z "$opt_nowrite" ]; then
+        echo "Warning: Not running as root - assuming -n"
+	opt_nowrite=1
+    fi
+fi
+
+dist_url=$dist_proto://$dist_host$dist_path/NetBSD-$version/dreamcast/binary
+sets_url_dir=$dist_url/sets
+kernel_url_dir=$dist_url/kernel
+
+if [ -n "$opt_datadir" ] ; then
+    datadir=$opt_datadir
+else
+    datadir=download/$version
+fi
+
+if [ -n "$opt_clean" ] ; then
+    rm -rf $tmpdir
+fi
+mkdir -p $tmpdir
+cd $tmpdir
+
+fetch_file()
+{
+url=$1
+file=$2
+echo -n "$file: "
+if [ ! -f $file ] ; then
+    mkdir -p $(dirname $file)
+    ftp -o $file.tmp $url
+    mv $file.tmp $file
+else
+    echo "already present"
+fi
+}
+
+download_sets()
+{
+download_dir=$1
+for f in $(ftp -o - $sets_url_dir/ | sed -n 's/.*<a href="\([^"]*z\)".*/\1/p');
+    do
+    fetch_file $sets_url_dir/$f $download_dir/$f
+done
+}
+
+prepare_audio_track()
+{
+audio_file=$1
+echo -n "$audio_file: "
+if [ ! -f $audio_file ] ; then
+    dd if=/dev/zero bs=2352 count=300 of=$audio_file # Min 4 seconds audio
+else
+    echo "already present"
+fi
+}
+
+prepare_ip_txt()
+{
+ip_file=$1
+ip_boot=$2	# Must be ISO9660 compliant - all caps FILE.EXT
+ip_name=$3
+cat > $ip_file <<END
+Hardware ID   : SEGA SEGAKATANA
+Maker ID      : SEGA ENTERPRISES
+Device Info   : 0000 CD-ROM1/1
+Area Symbols  : JUE
+Peripherals   : E000F10
+Product No    : T0000
+Version       : V1.000
+Release Date  : $(date +%Y%M%d)
+Boot Filename : $ip_boot
+SW Maker Name : NetBSD
+Game Title    : $ip_name
+END
+}
+run_cdrecord()
+{
+echo cdrecord "$@"
+if [ -z "$opt_nowrite" ] ; then
+    cdrecord "$@"
+fi
+}
+
+mkdir -p data
+kernel_file=netbsd-$kernel_type.bin.gz
+kernel=$datadir/kernel/$kernel_file
+if [ ! -n "$opt_datadir" ]; then # no datadir specified, download if necessary
+
+    echo; echo ">> Download and uncompress kernel if needed"
+    fetch_file $kernel_url_dir/$kernel_file $kernel
+
+    if [ -n "$opt_release" ] ; then
+        echo; echo ">> Download and uncompress release sets"
+        download_sets $datadir/sets
+    fi
+fi # datadir
+
+echo; echo ">> Create audio track"
+prepare_audio_track audio.raw
+
+echo; echo ">> Scramble $kernel_type kernel into loadable format"
+zcat $kernel > netbsd.tmp
+dc-scramble netbsd.tmp data/NETBSD.BIN
+rm -f netbsd.tmp
+
+echo; echo ">> Generate the ip.txt file and use to create IP.BIN bootloader"
+prepare_ip_txt ip.txt NETBSD.BIN $version-$kernel_type
+dc-makeip ip.txt ip.bin
+
+if [ -n "$opt_release" ] ; then
+    echo; echo ">> Extract sets"
+    mkdir -p data/var/db/sets
+    for f in $datadir/sets/*.t?z ; do
+	if [ ! -f data/var/db/sets/$(basename $f) ] ; then
+	    echo " - $f"
+	    tar xpzf $f -C data
+	    touch data/var/db/sets/$(basename $f) # touch after extract
+	fi
+    done
+fi
+# 
+echo; echo ">> Create filesystem with boot loader"
+( cd data && mkisofs -quiet -R -l -C 0,11702 -o ../data.iso .)
+( cat ip.bin ; dd if=data.iso bs=2048 skip=16 ) > data.raw
+
+echo; echo ">> Burn CD"
+echo "cd $tmpdir"
+run_cdrecord $opt_cdrecord -multi -audio audio.raw
+run_cdrecord $opt_cdrecord -multi -multi -xa -eject data.raw
+
+rm ip.txt ip.bin
