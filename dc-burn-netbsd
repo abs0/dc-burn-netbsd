@@ -66,7 +66,7 @@ Usage: dc-burn-netbsd [opts]
  -v vers : Set NetBSD version ($version) eg: 5.1 6.0_BETA2
 
 dc-burn will create a temporary work directory $tmpdir which will
-need to have sufficient space to store the downloaded files
+need to have sufficient space to store the downloaded & generated files.
 
 if -d is used the directory is expected to match the layout on ftp.netbsd.org:
  - kernel/netbsd-\$type.bin.gz, and
