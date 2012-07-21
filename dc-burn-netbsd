@@ -33,13 +33,19 @@ opt_cdrecord="driveropts=burnfree gracetime=3"
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-while getopts Cc:d:hk:nrv: f; do
+while getopts Cc:d:hk:nr:v: f; do
     case $f in
         C)  opt_clean=1 ;;
         v)  version="$OPTARG" ;;
         c)  opt_cdrecord="$OPTARG" ;;
-	d)  opt_datadir="$OPTARG" ;;
-	r)  opt_release=1 ;;
+	d)  opt_distdir="$OPTARG" ;;
+	r)  case "$OPTARG" in
+		base) opt_release='^(base|etc).*z$' ;;
+		std) opt_release='^[^x].*z$' ;;
+		x) opt_release='.*z$' ;;
+		*) opt_show_help=1; echo '-r must be base, std or x' ;;
+	    esac
+	    ;;
         h)  opt_show_help=1 ;;
         k)  kernel_type="$OPTARG" ;;
         n)  opt_nowrite=1 ;;
@@ -57,11 +63,11 @@ if [ $# != 0 -o -n "$opt_show_help" ] ; then
 Usage: dc-burn-netbsd [opts]
  -C      : Clean work directory before starting
  -c opts : Set cdrecord opts ($opt_cdrecord)
- -d      : Take kernel/ & sets/ under datadir - no downloading
+ -d      : Take kernel/ & sets/ under distdir - no downloading
  -h      : This help
  -k type : Set kernel type ($kernel_type) eg: GENERIC or GENERIC_MD
  -n      : Generate data but do not write (just display cdrecord commands)
- -r      : Include full NetBSD release on CD
+ -r type : Include NetBSD release on CD, type is base, std, or x
  -t tmpd : Set temporary work directory to tmpd
  -v vers : Set NetBSD version ($version) eg: 5.1 6.0_BETA2
 
@@ -78,7 +84,8 @@ fi
 
 if [ $(id -u) != 0 ] ; then
     if [ -n "$opt_release" ]; then
-        echo "Warning: not running as root: permissions will be incorrect"
+        echo "Error: must be root to include release files"
+	exit 1
     fi
     if [ -z "$opt_nowrite" ]; then
         echo "Warning: Not running as root - assuming -n"
@@ -90,10 +97,10 @@ dist_url=$dist_proto://$dist_host$dist_path/NetBSD-$version/dreamcast/binary
 sets_url_dir=$dist_url/sets
 kernel_url_dir=$dist_url/kernel
 
-if [ -n "$opt_datadir" ] ; then
-    datadir=$opt_datadir
+if [ -n "$opt_distdir" ] ; then
+    distdir=$opt_distdir
 else
-    datadir=download/$version
+    distdir=download/$version
 fi
 
 if [ -n "$opt_clean" ] ; then
@@ -119,10 +126,97 @@ fi
 download_sets()
 {
 download_dir=$1
-for f in $(ftp -o - $sets_url_dir/ | sed -n 's/.*<a href="\([^"]*z\)".*/\1/p');
-    do
+match="$2"
+for f in $(ftp -o - $sets_url_dir/ | sed -n 's/.*<a href="\([^"]*z\)".*/\1/p' | egrep "$match"); do
     fetch_file $sets_url_dir/$f $download_dir/$f
 done
+}
+
+release_sets()
+{
+sets_dir=$1
+match="$2"
+if [ -z "$match" ] ; then
+    return
+fi
+ls $sets_dir | egrep "$match" | sed "s:^:$sets_dir/:"
+}
+
+extract_sets()
+{
+data_dir=$1
+sets_dir=$2
+match=$3
+for tarfile in $(release_sets $sets_dir "$match") ; do
+    echo " - $tarfile"
+    tar xpzf $tarfile -C $data_dir
+done
+
+if [ -x $data_dir/dev/MAKEDEV ] ; then
+    echo "Run MAKEDEV"
+    (cd $data_dir/dev && ./MAKEDEV all)
+fi
+
+echo "Create fstab"
+cat > $data_dir/etc/fstab << END
+/dev/gdrom0a /           cd9660 ro 0 0
+END
+
+mkdir -p $data_dir/.tmpfs
+if [ ! -f $data_dir/etc/rc.d/tmpfs ] ; then
+    echo "Create rc.d/tmpfs"
+    cat > $data_dir/etc/rc.d/tmpfs <<END
+#!/bin/sh
+
+# REQUIRE: DISKS 
+# PROVIDE: tmpfs
+# BEFORE:  mountcritlocal
+ 
+$_rc_subr_loaded . /etc/rc.subr
+
+name="tmpfs"
+start_cmd="tmpfs_start"
+
+tmpfs_start()
+{
+        mount -t tmpfs tmpfs /.tmpfs
+        for dir in dev etc root var ; do
+                mkdir -p /.tmpfs/$dir
+                mount -t union /.tmpfs/$dir /$dir
+        done
+}
+ 
+load_rc_config $name
+run_rc_command "$1"
+END
+
+fi
+
+if grep -q 'rc_configured=NO' $data_dir/etc/rc.conf ; then
+    echo "Update rc.conf"
+    (
+    sed 's/rc_configured=NO/rc_configured=YES/' $data_dir/etc/rc.conf
+    echo 'dhcpcd=YES'
+    echo 'wscons=YES'
+    echo 'sshd=YES'
+    echo 'inetd=NO'
+    echo 'cron=NO'
+    echo 'critical_filesystems_local="/.tmpfs/etc /etc /.tmpfs/dev /dev /.tmpfs/var /var"'
+    ) > $data_dir/etc/rc.conf.tmp
+    mv $data_dir/etc/rc.conf.tmp $data_dir/etc/rc.conf
+fi
+
+if ! grep -q '^PermitRootLogin yes' $data_dir/etc/ssh/sshd_config ; then
+    echo "Add PermitRootLogin yes to sshd_config"
+    echo "PermitRootLogin yes" >> $data_dir/etc/ssh/sshd_config
+fi
+
+if grep -q 'unknown off' $data_dir/etc/ttys ; then
+    echo "Set wsvt25 in ttys"
+    sed 's/unknown off/wsvt25  off/' $data_dir/etc/ttys > $data_dir/etc/ttys.tmp
+    mv $data_dir/etc/ttys.tmp $data_dir/etc/ttys
+fi
+
 }
 
 prepare_audio_track()
@@ -163,47 +257,51 @@ if [ -z "$opt_nowrite" ] ; then
 fi
 }
 
-mkdir -p data
 kernel_file=netbsd-$kernel_type.bin.gz
-kernel=$datadir/kernel/$kernel_file
-if [ ! -n "$opt_datadir" ]; then # no datadir specified, download if necessary
+kernel=$distdir/kernel/$kernel_file
+if [ ! -n "$opt_distdir" ]; then # no distdir specified, download if necessary
 
     echo; echo ">> Download and uncompress kernel if needed"
     fetch_file $kernel_url_dir/$kernel_file $kernel
 
     if [ -n "$opt_release" ] ; then
-        echo; echo ">> Download and uncompress release sets"
-        download_sets $datadir/sets
+        echo; echo ">> Download all release sets"
+        download_sets $distdir/sets "$opt_release"
     fi
-fi # datadir
+fi # distdir
 
 echo; echo ">> Create audio track"
 prepare_audio_track audio.raw
-
-echo; echo ">> Scramble $kernel_type kernel into loadable format"
-zcat $kernel > netbsd.tmp
-dc-scramble netbsd.tmp data/NETBSD.BIN
-rm -f netbsd.tmp
 
 echo; echo ">> Generate the ip.txt file and use to create IP.BIN bootloader"
 prepare_ip_txt ip.txt NETBSD.BIN $version-$kernel_type
 dc-makeip ip.txt ip.bin
 
-if [ -n "$opt_release" ] ; then
-    echo; echo ">> Extract sets"
-    mkdir -p data/var/db/sets
-    for f in $datadir/sets/*.t?z ; do
-	if [ ! -f data/var/db/sets/$(basename $f) ] ; then
-	    echo " - $f"
-	    tar xpzf $f -C data
-	    touch data/var/db/sets/$(basename $f) # touch after extract
-	fi
-    done
+dist_details="$(ls -l $kernel $(release_sets $distdir/sets "$opt_release"))"
+if [ "$(test -f data/.dist && cat data/.dist)" = "$dist_details" ]; then
+    echo "Contents of data already match requirements"
+else
+    echo ; echo ">> Clean data dir"
+    rm -rf data
+    mkdir -p data
+
+    echo; echo ">> Scramble $kernel_type kernel into loadable format"
+    zcat $kernel > netbsd.tmp
+    dc-scramble netbsd.tmp data/NETBSD.BIN
+    rm -f netbsd.tmp
+
+    if [ -n "$opt_release" ] ; then
+	echo; echo ">> Extract sets ($opt_release)"
+	extract_sets data $distdir/sets "$opt_release"
+    fi
+    echo "$dist_details" > data/.dist
 fi
+
 # 
 echo; echo ">> Create filesystem with boot loader"
-( cd data && mkisofs -quiet -R -l -C 0,11702 -o ../data.iso .)
-( cat ip.bin ; dd if=data.iso bs=2048 skip=16 ) > data.raw
+cp ip.bin data.raw
+( cd data && mkisofs -quiet -R -l -C 0,11702 -o - . | dd bs=2048 skip=16 ) \
+	>> data.raw
 
 echo; echo ">> Burn CD"
 echo "cd $tmpdir"
