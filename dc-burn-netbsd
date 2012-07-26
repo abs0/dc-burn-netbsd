@@ -337,7 +337,7 @@ echo; echo ">> Generate the ip.txt file and use to create IP.BIN bootloader"
 prepare_ip_txt ip.txt NETBSD.BIN $version-$kernel_type
 dc-makeip ip.txt ip.bin
 
-dist_details="$(ls -l $kernel ; (cd $distdir/sets && ls -l $opt_sets))"
+dist_details="$(ls -l $($kernel echo $opt_sets | fmt 1 | sed "s:^:$distdir/sets/:"))"
 if [ "$(test -f data/.dist && cat data/.dist)" = "$dist_details" ]; then
     echo "Contents of data already match requirements"
 else
