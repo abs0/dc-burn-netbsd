@@ -1,13 +1,5 @@
 #!/bin/sh -e
 
-dist_proto=http
-dist_host=ftp.netbsd.org
-dist_path=/pub/NetBSD
-version=6.0_BETA2
-kernel_type=GENERIC_MD
-tmpdir=dc-burn-netbsd-files
-opt_cdrecord="driveropts=burnfree gracetime=3"
-
 # Copyright (c) 2012 David Brownlee (Standard 2 clause BSD licence)
 # All rights reserved.
 #
@@ -33,123 +25,39 @@ opt_cdrecord="driveropts=burnfree gracetime=3"
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-while getopts Cc:d:hk:nr:t:v: f; do
-    case $f in
-        C)  opt_clean=1 ;;
-        v)  version="$OPTARG" ;;
-        c)  opt_cdrecord="$OPTARG" ;;
-	d)  opt_distdir="$OPTARG" ;;
-	r)  case "$OPTARG" in
-		base) opt_release='^(base|etc).*z$' ;;
-		std) opt_release='^[^x].*z$' ;;
-		x) opt_release='.*z$' ;;
-		*) opt_show_help=1; echo '-r must be base, std or x' ;;
-	    esac
-	    ;;
-        h)  opt_show_help=1 ;;
-        k)  kernel_type="$OPTARG" ;;
-        n)  opt_nowrite=1 ;;
-        t)  tmpdir="$OPTARG" ;;
-  esac
-done
-shift $(expr $OPTIND - 1)
+version=6.0_BETA2
+kernel_type=GENERIC_MD
+tmpdir=dc-burn-netbsd-files
+opt_cdrecord="driveropts=burnfree gracetime=3"
 
-# sample to work out most recent version...
-# ftp -o - http://ftp.netbsd.org/pub/NetBSD/ | \
-# sed -n 's/.*<a href="NetBSD-\([0-9][^"]*\)\/".*/\1/p'|tail -1
-
-if [ $# != 0 -o -n "$opt_show_help" ] ; then
-    cat <<END
-Usage: dc-burn-netbsd [opts]
- -C      : Clean work directory before starting
- -c opts : Set cdrecord opts ($opt_cdrecord)
- -d dist : Take kernel/ & sets/ under dist dir - will not try to download
- -h      : This help
- -k type : Set kernel type ($kernel_type) eg: GENERIC or GENERIC_MD
- -n      : Generate data but do not write (just display cdrecord commands)
- -r type : Include NetBSD release on CD, type is base, std, or x
- -t tmpd : Set temporary work directory to tmpd
- -v vers : Set NetBSD version ($version) eg: 5.1 6.0_BETA2
-
-dc-burn will create a temporary work directory $tmpdir which will
-need to have sufficient space to store the downloaded & generated files.
-
-if -d is used the directory is expected to match the layout on ftp.netbsd.org:
- - kernel/netbsd-\$type.bin.gz, and
- - sets/base.tgz (etc - if -r given)
-
-END
-    exit;
-fi
-
-if [ $(id -u) != 0 ] ; then
-    if [ -n "$opt_release" ]; then
-        echo "Error: must be root to include release files"
-	exit 1
-    fi
-    if [ -z "$opt_nowrite" ]; then
-        echo "Warning: Not running as root - assuming -n"
-	opt_nowrite=1
-    fi
-fi
-
-dist_url=$dist_proto://$dist_host$dist_path/NetBSD-$version/dreamcast/binary
-sets_url_dir=$dist_url/sets
-kernel_url_dir=$dist_url/kernel
-
-if [ -n "$opt_distdir" ] ; then
-    distdir=$opt_distdir
-else
-    distdir=download/$version
-fi
-
-if [ -n "$opt_clean" ] ; then
-    rm -rf $tmpdir
-fi
-mkdir -p $tmpdir
-cd $tmpdir
-
-fetch_file()
-{
-url=$1
-file=$2
-echo -n "$file: "
-if [ ! -f $file ] ; then
-    mkdir -p $(dirname $file)
-    ftp -o $file.tmp $url
-    mv $file.tmp $file
-else
-    echo "already present"
-fi
-}
+base_sets="base.tgz etc.tgz"
+std_sets="$base_sets comp.tgz man.tgz misc.tgz modules.tgz tests.tgz text.tgz"
+x_sets="$std_sets xbase.tgz xcomp.tgz xetc.tgz xfont.tgz xserver.tgz"
 
 download_sets()
 {
 download_dir=$1
-match="$2"
-for f in $(ftp -o - $sets_url_dir/ | sed -n 's/.*<a href="\([^"]*z\)".*/\1/p' | egrep "$match"); do
-    fetch_file $sets_url_dir/$f $download_dir/$f
+shift;
+sets="$*"
+sets_url_dir=$dist_url/sets
+for f in $sets; do
+    fetch_file_if_missing sets/$f $download_dir/$f
 done
-}
-
-release_sets()
-{
-sets_dir=$1
-match="$2"
-if [ -z "$match" ] ; then
-    return
-fi
-ls $sets_dir | egrep "$match" | sed "s:^:$sets_dir/:"
 }
 
 extract_sets()
 {
+if [ -n "$sudo" ] ; then
+    $sudo $prog -E $*
+    return
+fi
 data_dir=$1
 sets_dir=$2
-match=$3
-for tarfile in $(release_sets $sets_dir "$match") ; do
+shift ; shift
+sets=$*
+for tarfile in $sets ; do
     echo " - $tarfile"
-    tar xpzf $tarfile -C $data_dir
+    tar xpzf $sets_dir/$tarfile -C $data_dir
 done
 
 if [ -x $data_dir/dev/MAKEDEV ] ; then
@@ -163,24 +71,24 @@ cat > $data_dir/etc/fstab << END
 END
 
 mkdir -p $data_dir/.tmpfs
-if [ ! -f $data_dir/etc/rc.d/tmpfs ] ; then
-    echo "Create rc.d/tmpfs"
-    cat > $data_dir/etc/rc.d/tmpfs <<END
-#!/bin/sh
+if [ ! -f $data_dir/etc/rc.d/readonlyroot ] ; then
+    echo "Create rc.d/readonlyroot"
+    echo '#!/bin/sh
 
 # REQUIRE: DISKS 
-# PROVIDE: tmpfs
+# PROVIDE: readonlyroot
 # BEFORE:  mountcritlocal
  
 $_rc_subr_loaded . /etc/rc.subr
 
-name="tmpfs"
-start_cmd="tmpfs_start"
+name="readonlyroot"
+start_cmd="readonlyroot_start"
 
-tmpfs_start()
+readonlyroot_start()
 {
+        mount -t tmpfs tmpfs /tmp
         mount -t tmpfs tmpfs /.tmpfs
-        for dir in dev etc root var ; do
+        for dir in etc root var ; do
                 mkdir -p /.tmpfs/$dir
                 mount -t union /.tmpfs/$dir /$dir
         done
@@ -188,35 +96,92 @@ tmpfs_start()
  
 load_rc_config $name
 run_rc_command "$1"
-END
-
+' > $data_dir/etc/rc.d/readonlyroot
+    chmod 755 $data_dir/etc/rc.d/readonlyroot
 fi
 
 if grep -q 'rc_configured=NO' $data_dir/etc/rc.conf ; then
     echo "Update rc.conf"
     (
     sed 's/rc_configured=NO/rc_configured=YES/' $data_dir/etc/rc.conf
-    echo 'dhcpcd=YES'
-    echo 'wscons=YES'
-    echo 'sshd=YES'
-    echo 'inetd=NO'
-    echo 'cron=NO'
-    echo 'critical_filesystems_local="/.tmpfs/etc /etc /.tmpfs/dev /dev /.tmpfs/var /var"'
+    cat << END
+hostname=dreamcast
+cron=NO     # Disable cron
+dhcpcd=NO   # If we have a network interface, get an IP - NOT YET
+inetd=NO    # Save memory
+postfix=NO  # Do not want to handle email
+quota=NO    # Save time
+wscons=YES
+update_motd=NO
+no_swap=YES # No point
+savecore=NO # No point as no dump space
+syslogd=NO  # Save memory
+wscons=NO   # Not yet
+critical_filesystems_local='/etc /dev /var /tmp'
+END
     ) > $data_dir/etc/rc.conf.tmp
     mv $data_dir/etc/rc.conf.tmp $data_dir/etc/rc.conf
 fi
+
+if [ "$(uname)" = NetBSD ] ; then
+    v="$(uname -r | sed 's/\..*//')"
+    if [ $v -ge 6 ] ; then
+	echo "Pregenerating var/db/services.cdb"
+        services_mkdb -o $data_dir/var/db/services.cdb $data_dir/etc/services
+    fi
+fi
+
+# No other way to stop running?
+echo 'start_cmd=":"' > $data_dir/etc/rc.conf.d/ttyflags
 
 if ! grep -q '^PermitRootLogin yes' $data_dir/etc/ssh/sshd_config ; then
     echo "Add PermitRootLogin yes to sshd_config"
     echo "PermitRootLogin yes" >> $data_dir/etc/ssh/sshd_config
 fi
 
-if grep -q 'unknown off' $data_dir/etc/ttys ; then
+if grep -q 'unknown	off' $data_dir/etc/ttys ; then
     echo "Set wsvt25 in ttys"
-    sed 's/unknown off/wsvt25  off/' $data_dir/etc/ttys > $data_dir/etc/ttys.tmp
+    sed 's/unknown	off/wsvt25	off/' $data_dir/etc/ttys > $data_dir/etc/ttys.tmp
     mv $data_dir/etc/ttys.tmp $data_dir/etc/ttys
 fi
 
+# So it can be updated later if we are currently root
+touch $data_dir/.dist
+chmod 666 $data_dir/.dist
+}
+
+fetch_file_if_missing()
+{
+remotefile=$1
+file=$2
+echo -n "$file: "
+if [ ! -f $file ] ; then
+    mkdir -p $(dirname $file)
+    # Fall back to looking in NetBSD-archive
+    if ! ftp -o - $dist_url > /dev/null ; then
+	echo "Switching to NetBSD-archive"
+	dist_url=http://ftp.netbsd.org/pub/NetBSD/NetBSD-archive/NetBSD-$version/dreamcast/binary
+    fi
+    ftp -o $file.tmp $dist_url/$remotefile
+    mv $file.tmp $file
+else
+    echo "already present"
+fi
+}
+
+getlinks()  
+{           
+url="$1"    
+pattern="$2"
+ftp -o - $url | sed -n 's/.*<a href="\([^"]*\)".*/\1/p' | egrep "$pattern"
+}       
+
+list_versions()
+{
+    (
+    getlinks http://ftp.netbsd.org/pub/NetBSD/ 'NetBSD-[0-9]' ;
+    getlinks http://ftp.netbsd.org/pub/NetBSD/NetBSD-archive 'NetBSD-[0-9]'
+    ) | sed -e 's/NetBSD-//' -e 's:/::' | grep -v '^1\.[0-5]' | sort
 }
 
 prepare_audio_track()
@@ -249,24 +214,119 @@ SW Maker Name : NetBSD
 Game Title    : $ip_name
 END
 }
+
 run_cdrecord()
 {
 echo cdrecord "$@"
 if [ -z "$opt_nowrite" ] ; then
-    cdrecord "$@"
+    $sudo cdrecord "$@"
 fi
 }
+
+#### main() start
+#
+
+while getopts CEc:d:ehk:nr:t:v: f; do
+    case $f in
+        C)  opt_clean=1 ;;
+	E)  opt_extract=1; opt_nowrite=1 ;;
+        e)  opt_emulator=1 ;;
+        v)  version="$OPTARG" ;;
+        c)  opt_cdrecord="$OPTARG" ;;
+	d)  opt_distdir="$OPTARG" ;;
+	r)  case "$OPTARG" in
+		base) opt_sets="$base_sets" ;;
+		std)  opt_sets="$std_sets" ;;
+		x)    opt_sets="$x_sets" ;;
+		*)    opt_sets="$OPTARG" ;;
+	    esac
+	    echo "Sets set to: $opt_sets"
+	    ;;
+        h)  opt_show_help=1 ;;
+        k)  kernel_type="$OPTARG" ;;
+        n)  opt_nowrite=1 ;;
+        t)  tmpdir="$OPTARG" ;;
+  esac
+done
+shift $(expr $OPTIND - 1)
+
+# Used to determine program to call for -E
+case "$0" in
+    /*) prog=$0 ;;
+    *)  prog=$PWD/$0 ;;
+esac
+
+# Used internally if we needed to sudo to extract
+if [ "$opt_extract" ] ; then
+    extract_sets "$@"
+    exit
+fi
+
+if [ $# != 0 -o -n "$opt_show_help" ] ; then
+    cat <<END
+Usage: dc-burn-netbsd [opts]
+ -C      : Clean work directory before starting
+ -c opts : Set cdrecord opts ($opt_cdrecord)
+ -d dist : Take kernel/ & sets/ under dist dir - will not try to download
+ -e      : Boot resultant image under an emulator (requires gxemul)
+ -h      : This help
+ -k type : Set kernel type ($kernel_type) eg: GENERIC or GENERIC_MD
+ -n      : Generate data but do not write (just display cdrecord commands)
+ -r type : Include NetBSD release, type is base, std, x or list of sets
+ -t tmpd : Set temporary work directory to tmpd
+ -v vers : Set NetBSD version ($version) use '?' for list
+
+dc-burn will create a temporary work directory $tmpdir which will
+need to have sufficient space to store the downloaded & generated files.
+
+if -d is used the directory is expected to match the layout on ftp.netbsd.org:
+ - kernel/netbsd-\$type.bin.gz, and
+ - sets/base.tgz (etc - if -r given)
+
+END
+    exit;
+fi
+
+if [ $(id -u) != 0 ] ; then
+    sudo=sudo
+    if [ -n "$opt_sets" ]; then
+        echo "Warning: Not running as root - will use sudo to extract release"
+    fi
+    if [ -z "$opt_nowrite" ]; then
+        echo "Warning: Not running as root - will use sudo for cdrecord"
+    fi
+fi
+
+dist_url=http://ftp.netbsd.org/pub/NetBSD/NetBSD-$version/dreamcast/binary
+
+if [ -n "$opt_distdir" ] ; then
+    distdir=$opt_distdir
+else
+    distdir=download/$version
+fi
+
+if [ -n "$opt_clean" ] ; then
+    $sudo rm -rf $tmpdir
+fi
+mkdir -p $tmpdir
+cd $tmpdir
+
+
+if [ "$version" = '?' ] ; then
+    echo $(list_versions)
+    exit
+fi
 
 kernel_file=netbsd-$kernel_type.bin.gz
 kernel=$distdir/kernel/$kernel_file
 if [ ! -n "$opt_distdir" ]; then # no distdir specified, download if necessary
 
-    echo; echo ">> Download and uncompress kernel if needed"
-    fetch_file $kernel_url_dir/$kernel_file $kernel
+    echo; echo ">> Download kernel if needed"
+    fetch_file_if_missing kernel/$kernel_file $kernel
 
-    if [ -n "$opt_release" ] ; then
+    if [ -n "$opt_sets" ] ; then
         echo; echo ">> Download all release sets"
-        download_sets $distdir/sets "$opt_release"
+        download_sets $distdir/sets $opt_sets
     fi
 fi # distdir
 
@@ -277,12 +337,12 @@ echo; echo ">> Generate the ip.txt file and use to create IP.BIN bootloader"
 prepare_ip_txt ip.txt NETBSD.BIN $version-$kernel_type
 dc-makeip ip.txt ip.bin
 
-dist_details="$(ls -l $kernel $(release_sets $distdir/sets "$opt_release"))"
+dist_details="$(ls -l $kernel ; (cd $distdir/sets && ls -l $opt_sets))"
 if [ "$(test -f data/.dist && cat data/.dist)" = "$dist_details" ]; then
     echo "Contents of data already match requirements"
 else
     echo ; echo ">> Clean data dir"
-    rm -rf data
+    $sudo rm -rf data
     mkdir -p data
 
     echo; echo ">> Scramble $kernel_type kernel into loadable format"
@@ -290,9 +350,9 @@ else
     dc-scramble netbsd.tmp data/NETBSD.BIN
     rm -f netbsd.tmp
 
-    if [ -n "$opt_release" ] ; then
-	echo; echo ">> Extract sets ($opt_release)"
-	extract_sets data $distdir/sets "$opt_release"
+    if [ -n "$opt_sets" ] ; then
+	echo; echo ">> Extract sets ($opt_sets)"
+	extract_sets data $distdir/sets $opt_sets
     fi
     echo "$dist_details" > data/.dist
 fi
@@ -300,12 +360,18 @@ fi
 # 
 echo; echo ">> Create filesystem with boot loader"
 cp ip.bin data.raw
-( cd data && mkisofs -quiet -R -l -C 0,11702 -o - . | dd bs=2048 skip=16 ) \
-	>> data.raw
+( cd data && $sudo mkisofs -quiet -R -l -C 0,11702 -o - . | dd bs=2048 skip=16 ) \
+>> data.raw
 
-echo; echo ">> Burn CD"
-echo "cd $tmpdir"
-run_cdrecord $opt_cdrecord -multi -audio audio.raw
-run_cdrecord $opt_cdrecord -multi -multi -xa -eject data.raw
+if [ -n "$opt_emulator" ]; then
+    # 23965696 is 2048 * 11702
+    echo; echo ">> Run emulator (gxemul)"
+    gxemul -XEdreamcast -d co23965696:data.raw
+else
+    echo; echo ">> Burn CD"
+    echo "cd $tmpdir"
+    run_cdrecord $opt_cdrecord -multi -audio audio.raw
+    run_cdrecord $opt_cdrecord -multi -multi -xa -eject data.raw
+fi
 
 rm ip.txt ip.bin
