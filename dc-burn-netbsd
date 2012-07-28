@@ -77,7 +77,7 @@ fi
 
 echo "Create fstab"
 cat > $data_dir/etc/fstab << END
-/dev/gdrom0a /           cd9660 ro o 0
+/dev/gdrom0a /           cd9660 ro 0 0
 END
 
 echo "Update hosts"
@@ -125,19 +125,19 @@ if grep -q 'rc_configured=NO' $data_dir/etc/rc.conf ; then
     (
     sed 's/rc_configured=NO/rc_configured=YES/' $data_dir/etc/rc.conf
     cat << END
+#
+critical_filesystems_local='/etc /tmp /var'
 hostname=dreamcast
+#
 cron=NO     # Disable cron
-dhcpcd=NO   # If we have a network interface, get an IP - NOT YET
+dhcpcd=YES  # If we have a network interface, set it up
 inetd=NO    # Save memory
+no_swap=YES # No point
 postfix=NO  # Do not want to handle email
 quota=NO    # Save time
-wscons=YES
-update_motd=NO
-no_swap=YES # No point
 savecore=NO # No point as no dump space
 syslogd=NO  # Save memory
-wscons=NO   # Not yet
-critical_filesystems_local='/etc /tmp /var'
+update_motd=NO # No need (and gives error on etc union mount tmpfs)
 END
     ) > $data_dir/etc/rc.conf.tmp
     mv $data_dir/etc/rc.conf.tmp $data_dir/etc/rc.conf
@@ -333,6 +333,8 @@ if [ $(id -u) != 0 ] ; then
 fi
 
 dist_url=http://ftp.netbsd.org/pub/NetBSD/NetBSD-$version/dreamcast/binary
+
+# XXX TODO: Handle daily builds from http://nyftp.netbsd.org/pub/NetBSD-daily/
 
 if [ "$version" = '?' ] ; then
     echo $(list_versions)
