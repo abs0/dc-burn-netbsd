@@ -45,10 +45,10 @@ for f in $sets; do
 done
 }
 
-extract_sets()
+extract_sets_and_setup_live()
 {
 if [ -n "$sudo" ] ; then
-    $sudo $prog -E $*
+    $sudo $prog -E $opt_live $*
     return
 fi
 data_dir=$1
@@ -60,6 +60,16 @@ for tarfile in $sets ; do
     tar xpzf $sets_dir/$tarfile -C $data_dir
 done
 
+# So it can be updated later if we are currently root
+touch $data_dir/.dist
+chmod 666 $data_dir/.dist
+
+if [ -z "$opt_live" ]; then
+    return
+fi
+
+echo ">> Setup extracted files for live CD use"
+
 if [ -x $data_dir/dev/MAKEDEV ] ; then
     echo "Run MAKEDEV"
     (cd $data_dir/dev && ./MAKEDEV all)
@@ -67,8 +77,18 @@ fi
 
 echo "Create fstab"
 cat > $data_dir/etc/fstab << END
-/dev/gdrom0a /           cd9660 ro 0 0
+/dev/gdrom0a /           cd9660 ro o 0
 END
+
+echo "Update hosts"
+echo "127.0.0.1 dreamcast" >> $data_dir/etc/hosts
+
+echo "Update motd"
+(
+echo "NetBSD $version ($kernel_type)"
+sed '1{/^NetBSD.*/{d;};};' < $data_dir/etc/motd
+) > $data_dir/etc/motd.tmp
+mv  $data_dir/etc/motd.tmp  $data_dir/etc/motd
 
 mkdir -p $data_dir/.tmpfs
 if [ ! -f $data_dir/etc/rc.d/readonlyroot ] ; then
@@ -117,7 +137,7 @@ no_swap=YES # No point
 savecore=NO # No point as no dump space
 syslogd=NO  # Save memory
 wscons=NO   # Not yet
-critical_filesystems_local='/etc /dev /var /tmp'
+critical_filesystems_local='/etc /tmp /var'
 END
     ) > $data_dir/etc/rc.conf.tmp
     mv $data_dir/etc/rc.conf.tmp $data_dir/etc/rc.conf
@@ -131,7 +151,16 @@ if [ "$(uname)" = NetBSD ] ; then
     fi
 fi
 
-# No other way to stop running?
+# Takes *forever* and no easy way to pre-generate 
+echo 'start_cmd=":"' > $data_dir/etc/rc.conf.d/fccache
+
+# No point in checking root filesystem
+echo 'start_cmd=":"' > $data_dir/etc/rc.conf.d/fsck_root
+
+# No easy way to pre-generate 
+echo 'start_cmd=":"' > $data_dir/etc/rc.conf.d/makemandb
+
+# Unnecessary & generates many permission denied errors
 echo 'start_cmd=":"' > $data_dir/etc/rc.conf.d/ttyflags
 
 if ! grep -q '^PermitRootLogin yes' $data_dir/etc/ssh/sshd_config ; then
@@ -145,9 +174,6 @@ if grep -q 'unknown	off' $data_dir/etc/ttys ; then
     mv $data_dir/etc/ttys.tmp $data_dir/etc/ttys
 fi
 
-# So it can be updated later if we are currently root
-touch $data_dir/.dist
-chmod 666 $data_dir/.dist
 }
 
 fetch_file_if_missing()
@@ -226,15 +252,18 @@ fi
 #### main() start
 #
 
-while getopts CEc:d:ehk:nr:t:v: f; do
+while getopts CEc:d:ehk:lns:t:v: f; do
     case $f in
-        C)  opt_clean=1 ;;
-	E)  opt_extract=1; opt_nowrite=1 ;;
-        e)  opt_emulator=1 ;;
-        v)  version="$OPTARG" ;;
+        C)  opt_clean=-C ;;
+	E)  opt_extract=-E ;;
         c)  opt_cdrecord="$OPTARG" ;;
 	d)  opt_distdir="$OPTARG" ;;
-	r)  case "$OPTARG" in
+        e)  opt_emulator=-e; opt_nowrite=-n ;;
+        h)  opt_show_help=-h ;;
+        k)  opt_kernel="$OPTARG"; kernel_type="$OPTARG" ;;
+        l)  opt_live=-l ;;
+        n)  opt_nowrite=-n ;;
+	s)  case "$OPTARG" in
 		base) opt_sets="$base_sets" ;;
 		std)  opt_sets="$std_sets" ;;
 		x)    opt_sets="$x_sets" ;;
@@ -242,13 +271,20 @@ while getopts CEc:d:ehk:nr:t:v: f; do
 	    esac
 	    echo "Sets set to: $opt_sets"
 	    ;;
-        h)  opt_show_help=1 ;;
-        k)  kernel_type="$OPTARG" ;;
-        n)  opt_nowrite=1 ;;
         t)  tmpdir="$OPTARG" ;;
+        v)  version="$OPTARG" ;;
   esac
 done
 shift $(expr $OPTIND - 1)
+
+if [ -n "$opt_live" ]; then
+    if [ -z "$opt_sets" ] ; then
+	opt_sets="$base_sets"
+    fi
+    if [ -z "$opt_kernel" ] ; then
+	kernel_type='GENERIC'
+    fi
+fi
 
 # Used to determine program to call for -E
 case "$0" in
@@ -258,7 +294,7 @@ esac
 
 # Used internally if we needed to sudo to extract
 if [ "$opt_extract" ] ; then
-    extract_sets "$@"
+    extract_sets_and_setup_live "$@"
     exit
 fi
 
@@ -271,8 +307,9 @@ Usage: dc-burn-netbsd [opts]
  -e      : Boot resultant image under an emulator (requires gxemul)
  -h      : This help
  -k type : Set kernel type ($kernel_type) eg: GENERIC or GENERIC_MD
+ -l      : Setup live cd - implies '-s base -K GENERIC' unless otherwise set
  -n      : Generate data but do not write (just display cdrecord commands)
- -r type : Include NetBSD release, type is base, std, x or list of sets
+ -s type : Include NetBSD release, type is base, std, x or list of sets
  -t tmpd : Set temporary work directory to tmpd
  -v vers : Set NetBSD version ($version) use '?' for list
 
@@ -280,8 +317,8 @@ dc-burn will create a temporary work directory $tmpdir which will
 need to have sufficient space to store the downloaded & generated files.
 
 if -d is used the directory is expected to match the layout on ftp.netbsd.org:
- - kernel/netbsd-\$type.bin.gz, and
- - sets/base.tgz (etc - if -r given)
+ - kernel/netbsd-\$type.bin.gz
+ - sets/base.tgz ... etc (if -s given)
 
 END
     exit;
@@ -299,11 +336,19 @@ fi
 
 dist_url=http://ftp.netbsd.org/pub/NetBSD/NetBSD-$version/dreamcast/binary
 
+if [ "$version" = '?' ] ; then
+    echo $(list_versions)
+    exit
+fi
+
 if [ -n "$opt_distdir" ] ; then
     distdir=$opt_distdir
 else
     distdir=download/$version
 fi
+
+kernel_file=netbsd-$kernel_type.bin.gz
+kernel=$distdir/kernel/$kernel_file
 
 if [ -n "$opt_clean" ] ; then
     $sudo rm -rf $tmpdir
@@ -311,21 +356,13 @@ fi
 mkdir -p $tmpdir
 cd $tmpdir
 
-
-if [ "$version" = '?' ] ; then
-    echo $(list_versions)
-    exit
-fi
-
-kernel_file=netbsd-$kernel_type.bin.gz
-kernel=$distdir/kernel/$kernel_file
 if [ ! -n "$opt_distdir" ]; then # no distdir specified, download if necessary
 
     echo; echo ">> Download kernel if needed"
     fetch_file_if_missing kernel/$kernel_file $kernel
 
     if [ -n "$opt_sets" ] ; then
-        echo; echo ">> Download all release sets"
+        echo; echo ">> Download sets if needed"
         download_sets $distdir/sets $opt_sets
     fi
 fi # distdir
@@ -337,7 +374,7 @@ echo; echo ">> Generate the ip.txt file and use to create IP.BIN bootloader"
 prepare_ip_txt ip.txt NETBSD.BIN $version-$kernel_type
 dc-makeip ip.txt ip.bin
 
-dist_details="$(ls -l $($kernel echo $opt_sets | fmt 1 | sed "s:^:$distdir/sets/:"))"
+dist_details="$(ls -l $kernel $(echo $opt_sets | fmt 1 | sed "s:^:$distdir/sets/:"); echo extra_opts=$opt_live)"
 if [ "$(test -f data/.dist && cat data/.dist)" = "$dist_details" ]; then
     echo "Contents of data already match requirements"
 else
@@ -352,7 +389,7 @@ else
 
     if [ -n "$opt_sets" ] ; then
 	echo; echo ">> Extract sets ($opt_sets)"
-	extract_sets data $distdir/sets $opt_sets
+	extract_sets_and_setup_live data $distdir/sets $opt_sets
     fi
     echo "$dist_details" > data/.dist
 fi
