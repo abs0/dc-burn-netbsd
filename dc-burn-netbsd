@@ -244,25 +244,23 @@ END
 run_cdrecord()
 {
 echo cdrecord "$@"
-if [ -z "$opt_nowrite" ] ; then
-    $sudo cdrecord "$@"
-fi
+$sudo cdrecord "$@"
 }
 
 #### main() start
 #
 
-while getopts CEc:d:ehk:lns:t:v: f; do
+while getopts CEbc:d:ehk:ls:t:v: f; do
     case $f in
         C)  opt_clean=-C ;;
 	E)  opt_extract=-E ;;
+        b)  opt_burn=-b ;;
         c)  opt_cdrecord="$OPTARG" ;;
 	d)  opt_distdir="$OPTARG" ;;
-        e)  opt_emulator=-e; opt_nowrite=-n ;;
+        e)  opt_emulator=-e ;;
         h)  opt_show_help=-h ;;
         k)  opt_kernel="$OPTARG"; kernel_type="$OPTARG" ;;
         l)  opt_live=-l ;;
-        n)  opt_nowrite=-n ;;
 	s)  case "$OPTARG" in
 		base) opt_sets="$base_sets" ;;
 		std)  opt_sets="$std_sets" ;;
@@ -302,13 +300,13 @@ if [ $# != 0 -o -n "$opt_show_help" ] ; then
     cat <<END
 Usage: dc-burn-netbsd [opts]
  -C      : Clean work directory before starting
+ -b      : Burn generated image to CD using cdrecord
  -c opts : Set cdrecord opts ($opt_cdrecord)
  -d dist : Take kernel/ & sets/ under dist dir - will not try to download
  -e      : Boot resultant image under an emulator (requires gxemul)
  -h      : This help
  -k type : Set kernel type ($kernel_type) eg: GENERIC or GENERIC_MD
  -l      : Setup live cd - implies '-s base -K GENERIC' unless otherwise set
- -n      : Generate data but do not write (just display cdrecord commands)
  -s type : Include NetBSD release, type is base, std, x or list of sets
  -t tmpd : Set temporary work directory to tmpd
  -v vers : Set NetBSD version ($version) use '?' for list
@@ -329,7 +327,7 @@ if [ $(id -u) != 0 ] ; then
     if [ -n "$opt_sets" ]; then
         echo "Warning: Not running as root - will use sudo to extract release"
     fi
-    if [ -z "$opt_nowrite" ]; then
+    if [ -n "$opt_burn" ]; then
         echo "Warning: Not running as root - will use sudo for cdrecord"
     fi
 fi
@@ -400,11 +398,15 @@ cp ip.bin data.raw
 ( cd data && $sudo mkisofs -quiet -R -l -C 0,11702 -o - . | dd bs=2048 skip=16 ) \
 >> data.raw
 
+echo ""; echo "Bootable image generated as $tmpdir/data.raw"
+
 if [ -n "$opt_emulator" ]; then
     # 23965696 is 2048 * 11702
     echo; echo ">> Run emulator (gxemul)"
     gxemul -XEdreamcast -d co23965696:data.raw
-else
+fi
+
+if [ -n "$opt_burn" ] ; then
     echo; echo ">> Burn CD"
     echo "cd $tmpdir"
     run_cdrecord $opt_cdrecord -multi -audio audio.raw
