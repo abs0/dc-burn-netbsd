@@ -176,6 +176,12 @@ fi
 
 }
 
+fatal()
+{
+echo "** $@" >&2
+exit 1
+}
+
 fetch_file_if_missing()
 {
 remotefile=$1
@@ -195,6 +201,14 @@ else
 fi
 }
 
+generate_daily_url()
+{
+version=$1
+tag=$(echo $version|sed -e 's/daily-//' -e 's/-[^-]*$//')
+build=$(echo $version|sed 's/.*-//')
+echo http://nyftp.netbsd.org/pub/NetBSD-daily/$tag/$build/dreamcast/binary
+}
+
 getlinks()  
 {           
 url="$1"    
@@ -202,12 +216,38 @@ pattern="$2"
 ftp -o - $url | sed -n 's/.*<a href="\([^"]*\)".*/\1/p' | egrep "$pattern"
 }       
 
+list_daily_version_branches()
+{
+dailyurl=http://nyftp.netbsd.org/pub/NetBSD-daily/
+for tag in $(getlinks $dailyurl 'netbsd-|HEAD'); do
+    echo daily-$tag | tr -d /
+done
+}
+
+list_daily_versions()
+{
+dailyurl=http://nyftp.netbsd.org/pub/NetBSD-daily/
+for tag in $(getlinks $dailyurl 'netbsd-|HEAD'); do
+    for build in $(getlinks $dailyurl$tag 'Z'); do
+	testurl=$dailyurl$tag${build}dreamcast/
+	if ftp -o - $testurl > /dev/null 2>&1 ;then
+	    echo daily-$tag-$build | tr -d /
+	fi
+    done
+done
+}
+
 list_versions()
 {
+    echo Official release versions:
     (
-    getlinks http://ftp.netbsd.org/pub/NetBSD/ 'NetBSD-[0-9]' ;
+    getlinks http://ftp.netbsd.org/pub/NetBSD/ 'NetBSD-[0-9]'
     getlinks http://ftp.netbsd.org/pub/NetBSD/NetBSD-archive 'NetBSD-[0-9]'
-    ) | sed -e 's/NetBSD-//' -e 's:/::' | grep -v '^1\.[0-5]' | sort
+    ) | sed -e 's/NetBSD-//' -e 's:/::' | grep -v '^1\.[0-5]' | sort | sed 's/^/ - /'
+    echo ; echo Daily built versions:
+    list_daily_versions | sed 's/^/ - /'
+    echo ; echo "Daily built branches (will take latest version):"
+    list_daily_version_branches | sed 's/^/ - /'
 }
 
 prepare_audio_track()
@@ -332,14 +372,23 @@ if [ $(id -u) != 0 ] ; then
     fi
 fi
 
-dist_url=http://ftp.netbsd.org/pub/NetBSD/NetBSD-$version/dreamcast/binary
-
-# XXX TODO: Handle daily builds from http://nyftp.netbsd.org/pub/NetBSD-daily/
-
-if [ "$version" = '?' ] ; then
-    echo $(list_versions)
-    exit
-fi
+case "$version" in 
+    '?' ) list_versions; exit ;;
+    daily-*-*Z )
+	dist_url=$(generate_daily_url $version)
+	;;
+    daily-* )
+	echo "Selecting most recent version for: $version"
+	version=$(list_daily_versions | sort | grep ${version}- | tail -1)
+	if [ -z "$version" ] ; then
+	    fatal "Unable to locate matching recent daily build"
+	fi
+	echo "Selected: $version"
+	dist_url=$(generate_daily_url $version)
+	;;
+    *)
+	dist_url=http://ftp.netbsd.org/pub/NetBSD/NetBSD-$version/dreamcast/binary
+esac
 
 if [ -n "$opt_distdir" ] ; then
     distdir=$opt_distdir
