@@ -27,6 +27,7 @@
 
 version=6.0_BETA2
 kernel_type=GENERIC_MD
+iso_image=data.raw
 tmpdir=dc-burn-netbsd-files
 opt_cdrecord="driveropts=burnfree gracetime=3"
 
@@ -70,10 +71,12 @@ fi
 
 echo ">> Setup extracted files for live CD use"
 
-if [ -x $data_dir/dev/MAKEDEV ] ; then
-    echo "Run MAKEDEV"
-    (cd $data_dir/dev && ./MAKEDEV all)
-fi
+# Unfortunately (serial) getty & remote fails on ro dev, even with union tmpfs
+# tested as of NetBSD-6
+# if [ -x $data_dir/dev/MAKEDEV ] ; then
+#     echo "Run MAKEDEV"
+#     (cd $data_dir/dev && ./MAKEDEV all)
+# fi
 
 echo "Create fstab"
 cat > $data_dir/etc/fstab << END
@@ -201,6 +204,14 @@ else
 fi
 }
 
+fullpath()
+{
+case "$1" in
+    /*) echo "$1" ;;
+    *)  echo "$(pwd)/$1" ;;
+esac
+}
+
 generate_daily_url()
 {
 version=$1
@@ -290,7 +301,7 @@ $sudo cdrecord "$@"
 #### main() start
 #
 
-while getopts CEbc:d:ehk:ls:t:v: f; do
+while getopts CEbc:d:ehi:k:ls:t:v: f; do
     case $f in
         C)  opt_clean=-C ;;
 	E)  opt_extract=-E ;;
@@ -299,6 +310,7 @@ while getopts CEbc:d:ehk:ls:t:v: f; do
 	d)  opt_distdir="$OPTARG" ;;
         e)  opt_emulator=-e ;;
         h)  opt_show_help=-h ;;
+        i)  opt_iso_image="$OPTARG" iso_image="$(fullpath $OPTARG)" ;;
         k)  opt_kernel="$OPTARG"; kernel_type="$OPTARG" ;;
         l)  opt_live=-l ;;
 	s)  case "$OPTARG" in
@@ -345,6 +357,7 @@ Usage: dc-burn-netbsd [opts]
  -d dist : Take kernel/ & sets/ under dist dir - will not try to download
  -e      : Boot resultant image under an emulator (requires gxemul)
  -h      : This help
+ -i      : Use existing ISO image. Assumed to be already bootable
  -k type : Set kernel type ($kernel_type) eg: GENERIC or GENERIC_MD
  -l      : Setup live cd - implies '-s base -K GENERIC' unless otherwise set
  -s type : Include NetBSD release, type is base, std, x or list of sets
@@ -405,63 +418,67 @@ fi
 mkdir -p $tmpdir
 cd $tmpdir
 
-if [ ! -n "$opt_distdir" ]; then # no distdir specified, download if necessary
-
-    echo; echo ">> Download kernel if needed"
-    fetch_file_if_missing kernel/$kernel_file $kernel
-
-    if [ -n "$opt_sets" ] ; then
-        echo; echo ">> Download sets if needed"
-        download_sets $distdir/sets $opt_sets
+if [ -z "$opt_iso_image" ] ; then
+    if [ -z "$opt_distdir" ]; then
+        # no distdir specified, download if necessary
+        echo; echo ">> Download kernel if needed"
+        fetch_file_if_missing kernel/$kernel_file $kernel
+    
+        if [ -n "$opt_sets" ] ; then
+            echo; echo ">> Download sets if needed"
+            download_sets $distdir/sets $opt_sets
+        fi
     fi
-fi # distdir
 
-echo; echo ">> Create audio track"
-prepare_audio_track audio.raw
+    echo; echo ">> Generate the ip.txt file and use to create IP.BIN bootloader"
+    prepare_ip_txt ip.txt NETBSD.BIN $version-$kernel_type
+    dc-makeip ip.txt ip.bin
 
-echo; echo ">> Generate the ip.txt file and use to create IP.BIN bootloader"
-prepare_ip_txt ip.txt NETBSD.BIN $version-$kernel_type
-dc-makeip ip.txt ip.bin
+    dist_details="$(ls -l $kernel $(echo $opt_sets | fmt 1 | sed "s:^:$distdir/sets/:"); echo extra_opts=$opt_live)"
+    if [ "$(test -f data/.dist && cat data/.dist)" = "$dist_details" ]; then
+        echo "Contents of data already match requirements"
+    else
+        echo ; echo ">> Clean data dir"
+        $sudo rm -rf data
+        mkdir -p data
 
-dist_details="$(ls -l $kernel $(echo $opt_sets | fmt 1 | sed "s:^:$distdir/sets/:"); echo extra_opts=$opt_live)"
-if [ "$(test -f data/.dist && cat data/.dist)" = "$dist_details" ]; then
-    echo "Contents of data already match requirements"
-else
-    echo ; echo ">> Clean data dir"
-    $sudo rm -rf data
-    mkdir -p data
+        echo; echo ">> Scramble $kernel_type kernel into loadable format"
+        zcat $kernel > netbsd.tmp
+        dc-scramble netbsd.tmp data/NETBSD.BIN
+        rm -f netbsd.tmp
 
-    echo; echo ">> Scramble $kernel_type kernel into loadable format"
-    zcat $kernel > netbsd.tmp
-    dc-scramble netbsd.tmp data/NETBSD.BIN
-    rm -f netbsd.tmp
-
-    if [ -n "$opt_sets" ] ; then
-	echo; echo ">> Extract sets ($opt_sets)"
-	extract_sets_and_setup_live data $distdir/sets $opt_sets
+        if [ -n "$opt_sets" ] ; then
+	    echo; echo ">> Extract sets ($opt_sets)"
+	    extract_sets_and_setup_live data $distdir/sets $opt_sets
+        fi
+        echo "$dist_details" > data/.dist
     fi
-    echo "$dist_details" > data/.dist
+
+    # 
+    echo; echo ">> Create filesystem with boot loader"
+    cp ip.bin $iso_image
+    ( cd data && $sudo mkisofs -quiet -R -l -C 0,11702 -o - . | \
+      dd bs=2048 skip=16 ) >> $iso_image
+
+    echo ""; echo "Bootable image generated as $tmpdir/$iso_image"
 fi
-
-# 
-echo; echo ">> Create filesystem with boot loader"
-cp ip.bin data.raw
-( cd data && $sudo mkisofs -quiet -R -l -C 0,11702 -o - . | dd bs=2048 skip=16 ) \
->> data.raw
-
-echo ""; echo "Bootable image generated as $tmpdir/data.raw"
 
 if [ -n "$opt_emulator" ]; then
     # 23965696 is 2048 * 11702
-    echo; echo ">> Run emulator (gxemul)"
-    gxemul -XEdreamcast -d co23965696:data.raw
+    gxemul="gxemul -XEdreamcast -d co23965696:$iso_image"
+    echo; echo ">> Run emulator ($gxemul)"
+    $gxemul
 fi
 
 if [ -n "$opt_burn" ] ; then
+
+    echo; echo ">> Create audio track"
+    prepare_audio_track audio.raw
+
     echo; echo ">> Burn CD"
     echo "cd $tmpdir"
     run_cdrecord $opt_cdrecord -multi -audio audio.raw
-    run_cdrecord $opt_cdrecord -multi -multi -xa -eject data.raw
+    run_cdrecord $opt_cdrecord -multi -multi -xa -eject $iso_image
 fi
 
 rm ip.txt ip.bin
