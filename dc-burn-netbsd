@@ -123,6 +123,12 @@ run_rc_command "$1"
     chmod 755 $data_dir/etc/rc.d/readonlyroot
 fi
 
+# Provide xinit with a usable default xorg.conf
+if [ -f $data_dir/etc/X11/xorg.conf.uskbd ] ; then
+    echo "Create xorg.conf"
+    cp $data_dir/etc/X11/xorg.conf.uskbd $data_dir/etc/X11/xorg.conf
+fi
+
 if grep -q 'rc_configured=NO' $data_dir/etc/rc.conf ; then
     echo "Update rc.conf"
     (
