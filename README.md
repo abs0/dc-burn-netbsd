@@ -9,6 +9,7 @@ Requirements:
 - cdrtools (for mkisofs & cdrecord)
 - Marcus Comstedt's makeip & scramble as dc-makeip & dc-scramble respectively
 
+```
 Usage: dc-burn-netbsd [opts]
  -C      : Clean work directory before starting
  -b      : Burn generated image to CD using cdrecord
@@ -20,7 +21,8 @@ Usage: dc-burn-netbsd [opts]
  -l      : Setup live cd - implies '-s base -K GENERIC' unless otherwise set
  -s type : Include NetBSD release, type is base, std, x or list of sets
  -t tmpd : Set temporary work directory to tmpd
- -v vers : Set NetBSD version (6.0_BETA2) use '?' for list
+ -v vers : Set NetBSD version (7.0.1) use '?' for list
+```
 
 dc-burn will create a temporary work directory dc-burn-netbsd-files which will
 need to have sufficient space to store the downloaded & generated files.
