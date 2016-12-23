@@ -71,6 +71,12 @@ fi
 
 echo ">> Setup extracted files for live CD use"
 
+if [ ! -z "$opt_custom" ]; then
+    echo "Sourcing $opt_custom for live CD customizations"
+    . "$opt_custom"
+    return
+fi
+
 # Unfortunately (serial) getty & remote fails on ro dev, even with union tmpfs
 # tested as of NetBSD-6
 # if [ -x $data_dir/dev/MAKEDEV ] ; then
@@ -307,7 +313,7 @@ $sudo cdrecord "$@"
 #### main() start
 #
 
-while getopts CEbc:d:ehi:k:ls:t:v: f; do
+while getopts CEbc:d:ehi:k:ls:t:v:x: f; do
     case $f in
         C)  opt_clean=-C ;;
 	E)  opt_extract=-E ;;
@@ -329,6 +335,7 @@ while getopts CEbc:d:ehi:k:ls:t:v: f; do
 	    ;;
         t)  tmpdir="$OPTARG" ;;
         v)  version="$OPTARG" ;;
+        x)  opt_custom="$OPTARG" ;;
   esac
 done
 shift $(expr $OPTIND - 1)
@@ -369,6 +376,7 @@ Usage: dc-burn-netbsd [opts]
  -s type : Include NetBSD release, type is base, std, x or list of sets
  -t tmpd : Set temporary work directory to tmpd
  -v vers : Set NetBSD version ($version) use '?' for list
+ -x path : Source a shell script to configure the live CD
 
 dc-burn will create a temporary work directory $tmpdir which will
 need to have sufficient space to store the downloaded & generated files.
