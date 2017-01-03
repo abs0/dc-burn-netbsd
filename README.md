@@ -22,6 +22,7 @@ Usage: dc-burn-netbsd [opts]
  -s type : Include NetBSD release, type is base, std, x or list of sets
  -t tmpd : Set temporary work directory to tmpd
  -v vers : Set NetBSD version (7.0.1) use '?' for list
+ -x path : Source a shell script to configure the live CD
 ```
 
 dc-burn will create a temporary work directory dc-burn-netbsd-files which will
