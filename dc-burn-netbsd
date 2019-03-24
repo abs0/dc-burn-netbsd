@@ -349,6 +349,10 @@ if [ -n "$opt_live" ]; then
     fi
 fi
 
+if [ -z "$opt_sets" ]; then
+	fatal "No sets specified, either -s or -l is required"
+fi
+
 # Used to determine program to call for -E
 case "$0" in
     /*) prog=$0 ;;
