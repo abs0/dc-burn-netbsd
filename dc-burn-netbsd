@@ -35,6 +35,12 @@ base_sets="base.tgz etc.tgz"
 std_sets="$base_sets comp.tgz man.tgz misc.tgz modules.tgz tests.tgz text.tgz"
 x_sets="$std_sets xbase.tgz xcomp.tgz xetc.tgz xfont.tgz xserver.tgz"
 
+if [ -x "$(command -v gtar)" ]; then
+	tar=gtar
+else
+	tar=tar
+fi
+
 download_sets()
 {
 download_dir=$1
@@ -58,7 +64,7 @@ shift ; shift
 sets=$*
 for tarfile in $sets ; do
     echo " - $tarfile"
-    tar xpzf $sets_dir/$tarfile -C $data_dir
+    $tar xpzf $sets_dir/$tarfile -C $data_dir
 done
 
 # So it can be updated later if we are currently root
