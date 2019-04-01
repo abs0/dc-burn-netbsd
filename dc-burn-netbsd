@@ -457,7 +457,7 @@ if [ -z "$opt_iso_image" ] ; then
         mkdir -p data
 
         echo; echo ">> Scramble $kernel_type kernel into loadable format"
-        zcat $kernel > netbsd.tmp
+        gzip -d -c $kernel > netbsd.tmp
         dc-scramble netbsd.tmp data/NETBSD.BIN
         rm -f netbsd.tmp
 
