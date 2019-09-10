@@ -485,7 +485,7 @@ fi
 
 if [ -n "$opt_emulator" ]; then
     # 23965696 is 2048 * 11702
-    gxemul="gxemul -XEdreamcast -d co23965696:$iso_image"
+    gxemul="gxemul -XEdreamcast -M 16 -d co23965696:$iso_image"
     echo; echo ">> Run emulator ($gxemul)"
     $gxemul
 fi
