@@ -303,7 +303,7 @@ Area Symbols  : JUE
 Peripherals   : E000F10
 Product No    : T0000
 Version       : V1.000
-Release Date  : $(date +%Y%M%d)
+Release Date  : $(date +%Y%m%d)
 Boot Filename : $ip_boot
 SW Maker Name : NetBSD
 Game Title    : $ip_name
