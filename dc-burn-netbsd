@@ -454,7 +454,7 @@ if [ -z "$opt_iso_image" ] ; then
     prepare_ip_txt ip.txt NETBSD.BIN $version-$kernel_type
     dc-makeip ip.txt ip.bin
 
-    dist_details="$(ls -l $kernel $(echo $opt_sets | fmt 1 | sed "s:^:$distdir/sets/:"); echo extra_opts=$opt_live)"
+    dist_details="$(ls -l $kernel $(echo $opt_sets | fmt -g 0 -w 1 | sed "s:^:$distdir/sets/:"); echo extra_opts=$opt_live)"
     if [ "$(test -f data/.dist && cat data/.dist)" = "$dist_details" ]; then
         echo "Contents of data already match requirements"
     else
